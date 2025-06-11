@@ -65,15 +65,15 @@ def start_message():
     )
 
 def run():
-    start_message()
-    while True:
-        try:
+    try:
+        start_message()
+        while True:
             fetch_binance()
             fetch_upbit()
             fetch_coinbase()
-        except Exception as e:
-            print(f"Ошибка при обновлении: {e}")
-        time.sleep(300)
+            time.sleep(300)
+    except Exception as e:
+        print(f"❌ Общая ошибка при запуске бота: {e}")
 
 if name == "__main__":
     run()
