@@ -1,13 +1,21 @@
 import os
 import time
+import threading
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
+from flask import Flask
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 sent_announcements = set()
+
+app = Flask(__name__)  # веб-сервер
+
+@app.route("/")
+def home():
+    return "🤖 Bot is running!"
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -75,7 +83,7 @@ def start_message():
         "⏰ Проверка каждые 5 минут."
     )
 
-def run():
+def bot_loop():
     try:
         start_message()
         while True:
@@ -88,4 +96,6 @@ def run():
         print(f"❌ Общая ошибка при запуске бота: {e}")
 
 if __name__ == "__main__":
-    run()
+    threading.Thread(target=bot_loop).start()
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
