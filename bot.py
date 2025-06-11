@@ -75,5 +75,5 @@ def run():
     except Exception as e:
         print(f"❌ Общая ошибка при запуске бота: {e}")
 
-if name == "__main__":
+if __name__ == "__main__":
     run()
