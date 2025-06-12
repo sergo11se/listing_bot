@@ -1,101 +1,90 @@
-import os
-import time
-import threading
 import requests
-from datetime import datetime
+import time
+import os
+import logging
 from bs4 import BeautifulSoup
 from flask import Flask
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+SEND_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
-sent_announcements = set()
+app = Flask(__name__)
 
-app = Flask(__name__)  # веб-сервер
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+last_binance = None
+last_upbit = None
+last_coinbase = None
+
+def send_telegram(msg):
+    try:
+        response = requests.post(SEND_URL, data={"chat_id": CHAT_ID, "text": msg})
+        if response.status_code != 200:
+            logging.warning(f"Telegram error: {response.text}")
+    except Exception as e:
+        logging.error(f"Failed to send message to Telegram: {e}")
+
+def check_binance():
+    global last_binance
+    try:
+        url = "https://www.binance.com/en/support/announcement/c-48"
+        html = requests.get(url).text
+        soup = BeautifulSoup(html, "html.parser")
+        article = soup.find("a", class_="css-1ej4hfo")
+        if article:
+            title = article.text.strip()
+            link = "https://www.binance.com" + article.get("href")
+            if title != last_binance and "Will List" in title:
+                last_binance = title
+                send_telegram(f"🟢 Новый листинг на Binance: {title}\n{link}")
+    except Exception as e:
+        logging.error(f"Binance error: {e}")
+
+def check_upbit():
+    global last_upbit
+    try:
+        url = "https://upbit.com/service_center/notice"
+        html = requests.get(url).text
+        soup = BeautifulSoup(html, "html.parser")
+        notice = soup.select_one(".notice-list a")
+        if notice:
+            title = notice.text.strip()
+            link = "https://upbit.com" + notice.get("href")
+            if title != last_upbit and ("거래지원" in title or "상장" in title):
+                last_upbit = title
+                send_telegram(f"🟢 Новый листинг на Upbit: {title}\n{link}")
+    except Exception as e:
+        logging.error(f"Upbit error: {e}")
+
+def check_coinbase():
+    global last_coinbase
+    try:
+        url = "https://www.coinbase.com/asset-directory"
+        html = requests.get(url).text
+        soup = BeautifulSoup(html, "html.parser")
+        assets = soup.find_all("a", class_="cds-asset-link")
+        if assets:
+            name = assets[0].text.strip()
+            link = "https://www.coinbase.com" + assets[0].get("href")
+            if name != last_coinbase:
+                last_coinbase = name
+                send_telegram(f"🟢 Возможно новое добавление на Coinbase: {name}\n{link}")
+    except Exception as e:
+        logging.error(f"Coinbase error: {e}")
 
 @app.route("/")
 def home():
-    return "🤖 Bot is running!"
-
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
-    try:
-        requests.post(url, data=payload)
-    except Exception as e:
-        print(f"Ошибка отправки Telegram-сообщения: {e}")
-
-def fetch_binance():
-    print("📡 Проверка Binance...")
-    try:
-        url = "https://www.binance.com/en/support/announcement"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, "html.parser")
-        for a in soup.select("a"):
-            href = a.get("href", "")
-            if "/en/support/announcement/" in href and "Will List" in a.text:
-                title = a.text.strip()
-                link = "https://www.binance.com" + href
-                if link not in sent_announcements:
-                    sent_announcements.add(link)
-                    send_telegram_message(f"🟢 <b>[Binance]</b> Новый листинг:\n<b>{title}</b>\n🔗 {link}")
-    except Exception as e:
-        print(f"❌ Ошибка в fetch_binance: {e}")
-
-def fetch_upbit():
-    print("📡 Проверка Upbit...")
-    url = "https://api-manager.upbit.com/api/v1/notices?region=global"
-    try:
-        res = requests.get(url)
-        response = res.json()
-        for item in response.get("data", []):
-            title = item["title"]
-            if "New digital asset" in title or "Listing" in title:
-                link = f"https://upbit.com/service_center/notice?id={item['id']}"
-                if link not in sent_announcements:
-                    sent_announcements.add(link)
-                    send_telegram_message(f"🟢 <b>[Upbit]</b> {title}\n🔗 {link}")
-    except Exception as e:
-        print(f"⚠️ Upbit вернул невалидный JSON или ошибка: {e}\nОтвет: {res.text if 'res' in locals() else 'нет ответа'}")
-
-def fetch_coinbase():
-    print("📡 Проверка Coinbase...")
-    url = "https://api.exchange.coinbase.com/assets"
-    try:
-        res = requests.get(url)
-        response = res.json()
-        for asset in response:
-            if asset.get("status") == "new":
-                name = asset.get("name", "")
-                id_ = asset.get("id", "")
-                link = f"https://www.coinbase.com/price/{id_.lower()}"
-                if link not in sent_announcements:
-                    sent_announcements.add(link)
-                    send_telegram_message(f"🟢 <b>[Coinbase]</b> Новый актив:\n<b>{name}</b>\n🔗 {link}")
-    except Exception as e:
-        print(f"⚠️ Coinbase вернул невалидный JSON или ошибка: {e}\nОтвет: {res.text if 'res' in locals() else 'нет ответа'}")
-
-def start_message():
-    send_telegram_message(
-        "🤖 Бот успешно запущен!\n"
-        "Следим за листингами на: Binance, Upbit, Coinbase\n"
-        "⏰ Проверка каждые 5 минут."
-    )
-
-def bot_loop():
-    try:
-        start_message()
-        while True:
-            fetch_binance()
-            fetch_upbit()
-            fetch_coinbase()
-            print("⏳ Ожидание 5 минут...\n")
-            time.sleep(300)
-    except Exception as e:
-        print(f"❌ Общая ошибка при запуске бота: {e}")
+    return "Listing bot is running."
 
 if __name__ == "__main__":
-    threading.Thread(target=bot_loop).start()
-    port = int(os.environ.get("PORT", 8000))
-    app.run(host="0.0.0.0", port=port)
+    send_telegram("✅ Бот запущен и следит за листингами.")
+    while True:
+        logging.info("📡 Проверка Binance...")
+        check_binance()
+        logging.info("📡 Проверка Upbit...")
+        check_upbit()
+        logging.info("📡 Проверка Coinbase...")
+        check_coinbase()
+        time.sleep(300)  # 5 минут
+
