@@ -27,18 +27,28 @@ def send_telegram_message(message):
 
 # Проверка Binance
 def check_binance():
+    sent = load_sent_binance()
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         url = 'https://www.binance.com/bapi/composite/v1/public/cms/article/list/query?type=1&pageNo=1&pageSize=10'
         response = requests.get(url, headers=headers)
-        data = response.json()
+        text = response.text
+        logging.info(f"Binance raw response: {text[:500]}")  # Логируем первые 500 символов
+
+        data = response.json()  # Если здесь ошибка, значит ответ не JSON
+
+        new_sent = set(sent)
 
         for article in data.get('data', {}).get('articles', []):
             title = article.get('title', '')
-            if 'will list' in title.lower():
+            if 'will list' in title.lower() and title not in sent:
                 send_telegram_message(f'📢 Binance Listing: {title}')
+                new_sent.add(title)
+
+        save_sent_binance(new_sent)
     except Exception as e:
         logging.warning(f'⚠️ Ошибка Binance: {e}')
+
 
 # Проверка Upbit (упрощённая, добавь свою реализацию при необходимости)
 def check_upbit():
