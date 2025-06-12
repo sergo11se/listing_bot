@@ -48,6 +48,14 @@ def check_binance():
         headers = {'User-Agent': 'Mozilla/5.0'}
         url = 'https://www.binance.com/bapi/composite/v1/public/cms/article/list/query?type=1&pageNo=1&pageSize=10'
         response = requests.get(url, headers=headers)
+
+        if response.status_code != 200:
+            logging.warning(f'Binance вернул статус: {response.status_code}')
+            return
+
+        # Выведем содержимое для отладки
+        logging.info(f'Binance raw response: {response.text[:500]}')
+
         data = response.json()
 
         new_sent = set(sent)
@@ -56,6 +64,11 @@ def check_binance():
             if 'will list' in title.lower() and title not in sent:
                 send_telegram_message(f'📢 Binance Listing: {title}')
                 new_sent.add(title)
+
+        save_sent(SENT_BINANCE_FILE, new_sent)
+    except Exception as e:
+        logging.warning(f'⚠️ Ошибка Binance: {e}')
+
 
         save_sent(SENT_BINANCE_FILE, new_sent)
     except Exception as e:
