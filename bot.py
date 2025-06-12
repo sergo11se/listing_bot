@@ -1,121 +1,122 @@
 import requests
 import time
+import json
 import os
 import logging
-import threading
+from bs4 import BeautifulSoup
 from flask import Flask
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # Настройки Telegram
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+TELEGRAM_TOKEN = '7683066723:AAHot2507_9RrkpNCMh5QKLi0cQr7cPEVH8'
+CHAT_ID = '5305138065'
 
-# Настройка логгера
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Файл для хранения уже отправленных листингов
+SENT_FILE = "sent.json"
 
-# Flask сервер для Render
-app = Flask(__name__)
+# Загрузка отправленных листингов
+if os.path.exists(SENT_FILE):
+    with open(SENT_FILE, "r") as f:
+        sent_listings = set(json.load(f))
+else:
+    sent_listings = set()
 
-@app.route("/")
-def home():
-    return "🤖 Listing bot is running!"
 
-def send_telegram_message(text):
+def save_sent_listings():
+    with open(SENT_FILE, "w") as f:
+        json.dump(list(sent_listings), f)
+
+
+def send_telegram(message):
+    url = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage'
+    data = {'chat_id': CHAT_ID, 'text': message}
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": text}
-        response = requests.post(url, json=data)
-        if response.status_code != 200:
-            logging.warning(f"Ошибка отправки в Telegram: {response.text}")
+        response = requests.post(url, data=data)
+        if not response.ok:
+            logging.warning(f"❌ Ошибка Telegram: {response.text}")
     except Exception as e:
-        logging.error(f"Telegram Error: {e}")
+        logging.warning(f"❌ Telegram ошибка: {e}")
+
 
 def check_binance():
     logging.info("📡 Проверка Binance...")
     try:
-        url = "https://api.binance.com/api/v3/exchangeInfo"
-        response = requests.get(url)
-        data = response.json()
-        # Пример фильтрации
-        symbols = [s["symbol"] for s in data["symbols"] if s["status"] == "TRADING"]
-        return symbols
+        response = requests.get('https://www.binance.com/bapi/composite/v1/public/cms/article/list/query?type=1&pageNo=1&pageSize=10')
+        articles = response.json().get("data", {}).get("articles", [])
+        for article in articles:
+            title = article.get("title", "")
+            if "will list" in title.lower():
+                symbol = title.split("Will List")[-1].strip().split()[0]
+                listing_id = f"binance:{symbol}"
+                if listing_id not in sent_listings:
+                    send_telegram(f"💥 Новый листинг на Binance: {symbol}")
+                    sent_listings.add(listing_id)
+                    save_sent_listings()
     except Exception as e:
-        logging.warning(f"Ошибка Binance: {e}")
-        return []
+        logging.warning(f"⚠️ Ошибка Binance: {e}")
+
 
 def check_upbit():
     logging.info("📡 Проверка Upbit...")
     try:
-        url = "https://api.upbit.com/v1/market/all"
-        response = requests.get(url)
-        data = response.json()
-        symbols = [item["market"] for item in data if item["market"].startswith("KRW-")]
-        return symbols
+        response = requests.get('https://upbit.com/service_center/notice')
+        soup = BeautifulSoup(response.text, 'html.parser')
+        notices = soup.select('a[href^="/service_center/notice"]')
+        for notice in notices:
+            text = notice.get_text(strip=True)
+            if "상장" in text or "리스트" in text:  # 'листинг' на корейском
+                link = notice['href']
+                listing_id = f"upbit:{link}"
+                if listing_id not in sent_listings:
+                    send_telegram(f"💥 Новый листинг на Upbit: {text}")
+                    sent_listings.add(listing_id)
+                    save_sent_listings()
     except Exception as e:
-        logging.warning(f"Ошибка Upbit: {e}")
-        return []
+        logging.warning(f"⚠️ Ошибка Upbit: {e}")
+
 
 def check_coinbase():
     logging.info("📡 Проверка Coinbase...")
     try:
-        url = "https://api.exchange.coinbase.com/products"
-        headers = {"User-Agent": "ListingBot/1.0"}
-        response = requests.get(url, headers=headers)
+        headers = {"Accept": "application/json"}
+        response = requests.get("https://api.coinbase.com/v2/assets/prices?limit=20", headers=headers)
         data = response.json()
-        symbols = [item["id"] for item in data]
-        return symbols
+        for item in data.get("data", []):
+            slug = item.get("slug", "")
+            if slug:
+                listing_id = f"coinbase:{slug}"
+                if listing_id not in sent_listings:
+                    send_telegram(f"💥 Новый листинг на Coinbase: {slug}")
+                    sent_listings.add(listing_id)
+                    save_sent_listings()
     except Exception as e:
-        logging.warning(f"Ошибка Coinbase: {e}")
-        return []
+        logging.warning(f"⚠️ Coinbase вернул ошибку: {e}")
 
-# Хранение уже известных символов
-known = {
-    "binance": set(),
-    "upbit": set(),
-    "coinbase": set()
-}
 
-def monitor_listings():
-    global known
+# Flask для Render ping
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Listing Bot работает!"
+
+
+def main_loop():
     while True:
         try:
-            new_binance = set(check_binance())
-            new_upbit = set(check_upbit())
-            new_coinbase = set(check_coinbase())
-
-            # Binance
-            added_binance = new_binance - known["binance"]
-            if added_binance:
-                for s in added_binance:
-                    send_telegram_message(f"🟢 Новый листинг на Binance: {s}")
-                known["binance"] = new_binance
-
-            # Upbit
-            added_upbit = new_upbit - known["upbit"]
-            if added_upbit:
-                for s in added_upbit:
-                    send_telegram_message(f"🟢 Новый листинг на Upbit: {s}")
-                known["upbit"] = new_upbit
-
-            # Coinbase
-            added_coinbase = new_coinbase - known["coinbase"]
-            if added_coinbase:
-                for s in added_coinbase:
-                    send_telegram_message(f"🟢 Новый листинг на Coinbase: {s}")
-                known["coinbase"] = new_coinbase
-
+            check_binance()
+            check_upbit()
+            check_coinbase()
         except Exception as e:
             logging.error(f"❌ Общая ошибка при запуске бота: {e}")
-            send_telegram_message(f"❌ Ошибка в Listing Bot: {e}")
+            send_telegram(f"❌ Бот упал с ошибкой: {e}")
+        time.sleep(300)  # 5 минут
 
-        time.sleep(300)  # Проверка каждые 5 минут
-
-def start_bot():
-    send_telegram_message("✅ Listing Bot запущен и работает.")
-    monitor_listings()
 
 if __name__ == "__main__":
-    # Запуск Flask в отдельном потоке
-    port = int(os.environ.get("PORT", 10000))
-    threading.Thread(target=lambda: app.run(host="0.0.0.0", port=port)).start()
-    # Запуск логики бота
-    start_bot()
+    import threading
+    threading.Thread(target=main_loop, daemon=True).start()
+    app.run(host="0.0.0.0", port=10000)
+
